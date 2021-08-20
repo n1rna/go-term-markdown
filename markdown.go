@@ -1,7 +1,11 @@
 package markdown
 
 import (
+	"bytes"
+	"fmt"
+
 	md "github.com/gomarkdown/markdown"
+	"github.com/gomarkdown/markdown/ast"
 	"github.com/gomarkdown/markdown/parser"
 )
 
@@ -24,10 +28,31 @@ func Extensions() parser.Extensions {
 	return extensions
 }
 
+type ColumnRenderer interface {
+	md.Renderer
+	CountHeadings(ast ast.Node)
+	GetColumnizedBuffer() bytes.Buffer
+}
+
+func FinalRender(doc ast.Node, renderer ColumnRenderer) []byte {
+	var headerBuf bytes.Buffer
+	var footerBuf bytes.Buffer
+
+	// renderer.RenderHeader(&headerBuf, doc)
+	renderer.CountHeadings(doc)
+	ast.WalkFunc(doc, func(node ast.Node, entering bool) ast.WalkStatus {
+		return renderer.RenderNode(&headerBuf, node, entering)
+	})
+	buf := renderer.GetColumnizedBuffer()
+	renderer.RenderFooter(&footerBuf, doc)
+	fmt.Println(buf.String())
+	return headerBuf.Bytes()
+}
+
 func Render(source string, lineWidth int, leftPad int, opts ...Options) []byte {
 	p := parser.NewWithExtensions(Extensions())
 	nodes := md.Parse([]byte(source), p)
-	renderer := NewRenderer(lineWidth, leftPad, opts...)
+	renderer := NewRenderer(lineWidth, leftPad, 2, opts...)
 
-	return md.Render(nodes, renderer)
+	return FinalRender(nodes, renderer)
 }

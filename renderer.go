@@ -8,18 +8,18 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
 
-	"github.com/MichaelMure/go-term-text"
+	text "github.com/MichaelMure/go-term-text"
 	"github.com/alecthomas/chroma"
 	"github.com/alecthomas/chroma/formatters"
 	"github.com/alecthomas/chroma/lexers"
 	"github.com/alecthomas/chroma/styles"
 	"github.com/eliukblau/pixterm/pkg/ansimage"
 	"github.com/fatih/color"
-	md "github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
 	"github.com/kyokomi/emoji/v2"
 	"golang.org/x/net/html"
@@ -93,13 +93,22 @@ Table --> TableHeader
 
 */
 
-var _ md.Renderer = &renderer{}
+var _ ColumnRenderer = &renderer{}
 
 type renderer struct {
 	// maximum line width allowed
 	lineWidth int
 	// constant left padding to apply
 	leftPad int
+
+	columns []*bytes.Buffer
+
+	currentHeading int
+	currentColumn  int
+
+	headingPerColumn int
+	headingsCount    int
+	columnsNum       int
 
 	// Dithering mode for ansimage
 	// Default is fine directly through a terminal
@@ -127,11 +136,61 @@ type renderer struct {
 	table *tableRenderer
 }
 
+func (r *renderer) CountHeadings(node ast.Node) {
+	// Check heading nodes and decide number of headings per column
+	ast.WalkFunc(node, func(node ast.Node, entering bool) ast.WalkStatus {
+		if !entering {
+			return ast.GoToNext
+		}
+		switch node := node.(type) {
+		case *ast.Heading:
+			if node.Level == 3 {
+				r.headingsCount++
+			}
+			return ast.GoToNext
+		default:
+			return ast.GoToNext
+		}
+	})
+
+	r.headingPerColumn = r.headingsCount / r.columnsNum
+	r.currentHeading = 0
+	r.currentColumn = 0
+	for i := 0; i < r.columnsNum; i++ {
+		r.columns = append(r.columns, &bytes.Buffer{})
+	}
+}
+
+func (r *renderer) GetColumnizedBuffer() bytes.Buffer {
+	var buf bytes.Buffer
+
+	col1Lines := strings.Split(r.columns[0].String(), "\n")
+	col2Lines := strings.Split(r.columns[1].String(), "\n")
+
+	maxLines := max(len(col1Lines), len(col2Lines))
+
+	for i := 0; i < maxLines; i++ {
+		var line string
+		if i >= len(col1Lines)-1 || i > len(col2Lines)-1 {
+			line = "\n"
+		} else {
+			noSpace := strings.TrimSpace(col1Lines[i])
+			noStyle := stripStylingEscapes(noSpace)
+			neededPadding := max(0, r.lineWidth-len(noStyle)-r.leftPad)
+			line = fmt.Sprintf("%s%s%s %s\n", strings.Repeat(" ", r.leftPad), noSpace, strings.Repeat(" ", neededPadding), col2Lines[i])
+		}
+		buf.WriteString(line)
+	}
+
+	return buf
+}
+
 /// NewRenderer creates a new instance of the console renderer
-func NewRenderer(lineWidth int, leftPad int, opts ...Options) *renderer {
+func NewRenderer(lineWidth int, leftPad int, columnsNum int, opts ...Options) *renderer {
 	r := &renderer{
 		lineWidth:       lineWidth,
 		leftPad:         leftPad,
+		columnsNum:      columnsNum,
 		padAccumulator:  make([]string, 0, 10),
 		headingShade:    shade(defaultHeadingShades),
 		blockQuoteShade: shade(defaultQuoteShades),
@@ -154,13 +213,12 @@ func (r *renderer) popPad() {
 	r.padAccumulator = r.padAccumulator[:len(r.padAccumulator)-1]
 }
 
-func (r *renderer) RenderNode(w io.Writer, node ast.Node, entering bool) ast.WalkStatus {
-	// TODO: remove
-	// if node.AsLeaf() != nil {
-	// 	fmt.Printf("%T, %v (%s)\n", node, entering, string(node.AsLeaf().Literal))
-	// } else {
-	// 	fmt.Printf("%T, %v\n", node, entering)
-	// }
+func (r *renderer) RenderNode(_ io.Writer, node ast.Node, entering bool) ast.WalkStatus {
+	if r.currentHeading > 0 && r.currentHeading%r.headingPerColumn == 0 {
+		r.currentColumn = min(r.currentColumn+1, r.columnsNum-1)
+	}
+
+	w := r.columns[r.currentColumn]
 
 	switch node := node.(type) {
 	case *ast.Document:
@@ -266,6 +324,10 @@ func (r *renderer) RenderNode(w io.Writer, node ast.Node, entering bool) ast.Wal
 	case *ast.Heading:
 		if !entering {
 			r.renderHeading(w, node.Level)
+		} else {
+			if node.Level == 3 {
+				r.currentHeading++
+			}
 		}
 
 	case *ast.HorizontalRule:
@@ -421,9 +483,15 @@ func (r *renderer) RenderNode(w io.Writer, node ast.Node, entering bool) ast.Wal
 	return ast.GoToNext
 }
 
-func (*renderer) RenderHeader(w io.Writer, node ast.Node) {}
+func (r *renderer) RenderHeader(w io.Writer, doc ast.Node) {
 
-func (*renderer) RenderFooter(w io.Writer, node ast.Node) {}
+	fmt.Println("leteeteet", r.headingPerColumn, r.columnsNum, len(r.columns))
+	// if you like, you can also write some heading stuff!
+}
+
+func (r *renderer) RenderFooter(w io.Writer, node ast.Node) {
+	// fmt.Println(r.columns[1], "r.jfjfjfjfjfjfjffj")
+}
 
 func (r *renderer) renderHorizontalRule(w io.Writer) {
 	_, _ = fmt.Fprintf(w, "%s%s\n\n", r.pad(), strings.Repeat("─", r.lineWidth-r.leftPad))
@@ -498,7 +566,8 @@ func (r *renderer) renderFormattedCodeBlock(w io.Writer, code string) {
 	// remove the trailing line break
 	code = strings.TrimRight(code, "\n")
 
-	r.addPad(GreenBold("┃ "))
+	// r.addPad(GreenBold("┃ "))
+	r.addPad(GreenBold("| "))
 	output, _ := text.WrapWithPad(code, r.lineWidth, r.pad())
 	r.popPad()
 
@@ -972,4 +1041,9 @@ func shouldCleanText(node ast.Node) bool {
 	}
 
 	panic("bad markdown document or missing case")
+}
+
+func stripStylingEscapes(line string) string {
+	re := regexp.MustCompile(`\x1b\[[0-9|;]*m`)
+	return re.ReplaceAllString(line, "")
 }
