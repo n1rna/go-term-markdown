@@ -2,7 +2,7 @@ package markdown
 
 import (
 	"bytes"
-	"fmt"
+	"regexp"
 
 	md "github.com/gomarkdown/markdown"
 	"github.com/gomarkdown/markdown/ast"
@@ -35,24 +35,27 @@ type ColumnRenderer interface {
 }
 
 func FinalRender(doc ast.Node, renderer ColumnRenderer) []byte {
-	var headerBuf bytes.Buffer
-	var footerBuf bytes.Buffer
+	var content bytes.Buffer
 
-	// renderer.RenderHeader(&headerBuf, doc)
 	renderer.CountHeadings(doc)
 	ast.WalkFunc(doc, func(node ast.Node, entering bool) ast.WalkStatus {
-		return renderer.RenderNode(&headerBuf, node, entering)
+		return renderer.RenderNode(&content, node, entering)
 	})
+
 	buf := renderer.GetColumnizedBuffer()
-	renderer.RenderFooter(&footerBuf, doc)
-	fmt.Println(buf.String())
-	return headerBuf.Bytes()
+	return buf.Bytes()
 }
 
-func Render(source string, lineWidth int, leftPad int, opts ...Options) []byte {
+func CleanupHeaders(doc string) string {
+	re := regexp.MustCompile(`-{3}(.*\n)*-{3}`)
+	return re.ReplaceAllString(doc, "")
+}
+
+func Render(source string, lineWidth int, columns int, leftPad int, opts ...Options) []byte {
+	source = CleanupHeaders(source)
 	p := parser.NewWithExtensions(Extensions())
 	nodes := md.Parse([]byte(source), p)
-	renderer := NewRenderer(lineWidth, leftPad, 2, opts...)
+	renderer := NewRenderer(lineWidth, leftPad, columns, opts...)
 
 	return FinalRender(nodes, renderer)
 }

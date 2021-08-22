@@ -164,21 +164,30 @@ func (r *renderer) CountHeadings(node ast.Node) {
 func (r *renderer) GetColumnizedBuffer() bytes.Buffer {
 	var buf bytes.Buffer
 
-	col1Lines := strings.Split(r.columns[0].String(), "\n")
-	col2Lines := strings.Split(r.columns[1].String(), "\n")
-
-	maxLines := max(len(col1Lines), len(col2Lines))
-
-	for i := 0; i < maxLines; i++ {
-		var line string
-		if i >= len(col1Lines)-1 || i > len(col2Lines)-1 {
-			line = "\n"
-		} else {
-			noSpace := strings.TrimSpace(col1Lines[i])
-			noStyle := stripStylingEscapes(noSpace)
-			neededPadding := max(0, r.lineWidth-len(noStyle)-r.leftPad)
-			line = fmt.Sprintf("%s%s%s %s\n", strings.Repeat(" ", r.leftPad), noSpace, strings.Repeat(" ", neededPadding), col2Lines[i])
+	columnSizes := make(map[int]int)
+	columnLines := make(map[int][]string)
+	maxColumnLines := 0
+	for i := 0; i < r.columnsNum; i++ {
+		columnLines[i] = strings.Split(r.columns[i].String(), "\n")
+		columnSizes[i] = len(columnLines[i])
+		if columnSizes[i] > maxColumnLines {
+			maxColumnLines = columnSizes[i]
 		}
+	}
+
+	for i := 0; i < maxColumnLines; i++ {
+		var line string
+		for j := 0; j < r.columnsNum; j++ {
+			if columnSizes[j]-1 >= i {
+				noStyle := stripStylingEscapes(columnLines[j][i])
+				neededPadding := max(0, r.lineWidth-len(noStyle)-r.leftPad)
+				line = fmt.Sprintf("%s %s%s", line, columnLines[j][i], strings.Repeat(" ", neededPadding))
+			} else {
+				// empty line for this column
+				line = fmt.Sprintf("%s %s", line, strings.Repeat(" ", r.lineWidth-r.leftPad))
+			}
+		}
+		line = fmt.Sprintf("%s\n", line)
 		buf.WriteString(line)
 	}
 
@@ -214,10 +223,6 @@ func (r *renderer) popPad() {
 }
 
 func (r *renderer) RenderNode(_ io.Writer, node ast.Node, entering bool) ast.WalkStatus {
-	if r.currentHeading > 0 && r.currentHeading%r.headingPerColumn == 0 {
-		r.currentColumn = min(r.currentColumn+1, r.columnsNum-1)
-	}
-
 	w := r.columns[r.currentColumn]
 
 	switch node := node.(type) {
@@ -326,6 +331,9 @@ func (r *renderer) RenderNode(_ io.Writer, node ast.Node, entering bool) ast.Wal
 			r.renderHeading(w, node.Level)
 		} else {
 			if node.Level == 3 {
+				if r.currentHeading > 0 && r.currentHeading%r.headingPerColumn == 0 {
+					r.currentColumn = min(r.currentColumn+1, r.columnsNum-1)
+				}
 				r.currentHeading++
 			}
 		}
@@ -485,12 +493,10 @@ func (r *renderer) RenderNode(_ io.Writer, node ast.Node, entering bool) ast.Wal
 
 func (r *renderer) RenderHeader(w io.Writer, doc ast.Node) {
 
-	fmt.Println("leteeteet", r.headingPerColumn, r.columnsNum, len(r.columns))
 	// if you like, you can also write some heading stuff!
 }
 
 func (r *renderer) RenderFooter(w io.Writer, node ast.Node) {
-	// fmt.Println(r.columns[1], "r.jfjfjfjfjfjfjffj")
 }
 
 func (r *renderer) renderHorizontalRule(w io.Writer) {
@@ -600,9 +606,6 @@ func (r *renderer) renderHTMLBlock(w io.Writer, node *ast.HTMLBlock) {
 	}
 
 	htmlWalker.WalkFunc(doc, func(node *html.Node, entering bool) htmlWalker.WalkStatus {
-		// if node.Type != html.TextNode {
-		// 	fmt.Println(node.Type, "(", node.Data, ")", entering)
-		// }
 
 		switch node.Type {
 		case html.CommentNode, html.DoctypeNode:
