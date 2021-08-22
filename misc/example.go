@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 
-	markdown "github.com/MichaelMure/go-term-markdown"
+	markdown "github.com/n1rna/go-term-markdown"
 )
 
 func main() {
@@ -14,7 +14,7 @@ func main() {
 		panic(err)
 	}
 
-	result := markdown.Render(string(source), 80, 6)
+	result := markdown.Render(string(source), 80, 1, 6)
 
 	fmt.Println(result)
 }
